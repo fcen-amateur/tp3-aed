@@ -56,9 +56,10 @@ tibble(
   y =  map2_dbl(nombre_nucleo, x, ~nucleo[[.x]](.y))
 ) %>%
   ggplot(aes(x, y, color = nombre_nucleo)) +
-  geom_line() -> fig2
+  geom_line() +
+  coord_fixed() -> fig2
 
-ggsave("fig2_nucleos.png", fig2)
+ggsave("fig2_nucleos.png", fig2, width = 6, height = 2.5)
 fig2
 
 # Ahora vamos a necesitar un "generador de generadores" de funciones de densidad:
