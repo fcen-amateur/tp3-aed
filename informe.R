@@ -38,12 +38,13 @@ cuad <- lm(temp_anual ~ poly(elevacion, 2), df)
 X <- df$elevacion
 Y <- df$temp_anual
 
-#' Listo primero los núcleos que mencionamos en clase.
-nucleo <- list(
-  "epanechnikov" = function(u) { ifelse( abs(u) <= 1, (3/4) * (1 - u^2), 0 ) },
-  "triangular"   = function(u) { ifelse( abs(u) <= 1, 1 - abs(u)       , 0 ) },
-  "uniforme"     = function(u) { ifelse( abs(u) <= 1, 1                , 0 ) },
-  "gaussiano"    = function(u) { 1 / (sqrt(2*pi)) * exp(-u^2/2) }
+indicadora <- function(z) { ifelse(abs(z) <= 1, 1, 0) }
+
+nucleos <- list(
+    'uniforme' = function(z) { indicadora(z) * (1/2) },
+    'triangular' = function(z) { indicadora(z) * (1 - abs(z)) },
+    'epanechnikov' = function(z) { indicadora(z) * (3/4) * (1 - z^2) },
+    'gaussiano' = function(z) { (1/sqrt(2 * pi)) * exp(-z^2/2) }
 )
 
 # Grafiquémoslos para ver que tengan sentido
