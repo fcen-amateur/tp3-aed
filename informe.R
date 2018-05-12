@@ -19,7 +19,7 @@ nombres_castellano <- c(
   "elevation" = "elevacion",
   "tann" = "temp_anual")
 
-df <- plyr::rename(df, nombres_castellano)
+df <- rename(df, nombres_castellano)
 
 df %>%
   ggplot(aes(x = elevacion, y = temp_anual)) +
