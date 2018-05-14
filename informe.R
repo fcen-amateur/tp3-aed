@@ -62,35 +62,39 @@ tibble(
 ggsave("fig2_nucleos.png", fig2, width = 6, height = 2.5)
 fig2
 
-# Ahora vamos a necesitar un "generador de generadores" de funciones de densidad:
+# Exploremos cómo estiman la densidad los distintos núcleos, con
+# algunos valores tentativos de ancho de banda (h):
 
-generador_estimador_densidad <- function(nucleo, h) {
-  #' Dado un nucleo y un ancho de banda 'h', devuelve una funcion que..
-  function(X) {
-    #' dado un vector X, devuelve una función que...
+estimar_densidad <- function(X, nombre_nucleo, h, x) {
     n <- length(X)
-    function(x) {
-      #' computa la densidad de X en x
-      1 / (2 * n * h) * sum(nucleo( (X - x) / h ))
-    }
-  }
+    nucleo <- nucleos[[nombre_nucleo]]
+    sum(nucleo((X - x) / h)) / (2 * n * h)
 }
 
-#' estimador_densidad_epanech es una funcion que dada una muestra X, devuelve
-#' una funcion de densidad empirica usando un nucleo epanechnikov y h=200
-estimador_densidad_epanech <- generador_estimador_densidad(nucleo$epanechnikov, 200)
-#' usamos la funcion anterior, para generar la ecdf (empirical cumulative density function) de X
-densidad_epanech_elevacion <- estimador_densidad_epanech(X)
+grilla <- min(df$elevacion):max(df$elevacion)
+valores_h <- c(50, 200, 400)
 
-#' Y ploteamos a ver qué pasa
-data <- tibble(
-  x = -100:2100,
-  y = map_dbl(x, densidad_epanech_elevacion)
-)
+for (h in valores_h) {
+    tibble(
+        elevacion = rep(grilla, length(names(nucleos))),
+        nucleo = rep(names(nucleos), each = length(grilla)),
+        densidad = map2_dbl(elevacion, nucleo, function(x, nucleo) {
+            estimar_densidad(df$elevacion, nucleo, h, x)
+        })
+    ) %>%
+        ggplot() +
+        aes(x = elevacion, y = densidad, color = nucleo) +
+        geom_line() +
+        labs(title = glue('h = {h}')) +
+        theme(axis.ticks.y = element_blank(),
+              axis.text.y = element_blank()) -> fig
 
-data %>% 
-  ggplot(aes(x,y)) +
-  geom_line() -> fig3
+    ggsave(glue('fig_densidad_con_h_{h}.png'), fig)
+    print(fig)
+}
+
+# Como se aprecia en las figuras, los núcleos de Epanechnikov y triangular
+# ofrecen resultados similares. El valor de h = 200 parece adecuado.
 
 ggsave("fig3_densidad_epanech_elevacion.png", fig3)
 fig3
