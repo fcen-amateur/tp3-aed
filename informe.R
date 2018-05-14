@@ -96,7 +96,12 @@ for (h in valores_h) {
 # Como se aprecia en las figuras, los núcleos de Epanechnikov y triangular
 # ofrecen resultados similares. El valor de h = 200 parece adecuado.
 
-ggsave("fig3_densidad_epanech_elevacion.png", fig3)
-fig3
+# Realicemos una regresión no paramétrica con el método Nadaraya-Watson.
 
-#' ¡Razonable!
+construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
+    function(x) {
+        nucleo <- nucleos[[nombre_nucleo]]
+        pesos <- nucleo((X - x) / h)
+        sum(pesos * Y) / sum(pesos)
+    }
+}
