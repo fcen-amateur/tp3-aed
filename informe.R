@@ -19,7 +19,7 @@ nombres_castellano <- c(
   "elevation" = "elevacion",
   "tann" = "temp_anual")
 
-df <- plyr::rename(df, nombres_castellano)
+df <- rename(df, nombres_castellano)
 
 df %>%
   ggplot(aes(x = elevacion, y = temp_anual)) +
@@ -38,12 +38,13 @@ cuad <- lm(temp_anual ~ poly(elevacion, 2), df)
 X <- df$elevacion
 Y <- df$temp_anual
 
-#' Listo primero los núcleos que mencionamos en clase.
-nucleo <- list(
-  "epanechnikov" = function(u) { ifelse( abs(u) <= 1, (3/4) * (1 - u^2), 0 ) },
-  "triangular"   = function(u) { ifelse( abs(u) <= 1, 1 - abs(u)       , 0 ) },
-  "uniforme"     = function(u) { ifelse( abs(u) <= 1, 1                , 0 ) },
-  "gaussiano"    = function(u) { 1 / (sqrt(2*pi)) * exp(-u^2/2) }
+indicadora <- function(z) { ifelse(abs(z) <= 1, 1, 0) }
+
+nucleos <- list(
+    'uniforme' = function(z) { indicadora(z) * (1/2) },
+    'triangular' = function(z) { indicadora(z) * (1 - abs(z)) },
+    'epanechnikov' = function(z) { indicadora(z) * (3/4) * (1 - z^2) },
+    'gaussiano' = function(z) { (1/sqrt(2 * pi)) * exp(-z^2/2) }
 )
 
 # Grafiquémoslos para ver que tengan sentido
@@ -55,9 +56,10 @@ tibble(
   y =  map2_dbl(nombre_nucleo, x, ~nucleo[[.x]](.y))
 ) %>%
   ggplot(aes(x, y, color = nombre_nucleo)) +
-  geom_line() -> fig2
+  geom_line() +
+  coord_fixed() -> fig2
 
-ggsave("fig2_nucleos.png", fig2)
+ggsave("fig2_nucleos.png", fig2, width = 6, height = 2.5)
 fig2
 
 # Ahora vamos a necesitar un "generador de generadores" de funciones de densidad:
