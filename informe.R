@@ -105,3 +105,72 @@ construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
         sum(pesos * Y) / sum(pesos)
     }
 }
+
+# Vamos a buscar el valor de h óptimo con el método K-Fold.
+# En el mismo loop vamos a utilizar también los modelos lineal y cuadrático.
+
+K <- 4
+
+# Asignamos un fold a cada fila:
+df <- df %>% mutate(k = sample(K, n(), replace = T))
+
+valores_h <- sort(union(seq(from = 50, to = 400, by = 20),
+                        seq(from = 100, to = 200, by = 5)))
+estimaciones <- NULL
+
+for (h in valores_h) {
+    for (fold_a_testear in 1:K) {
+        df_test <- df %>% filter(k == fold_a_testear)
+        df_train <- df %>% filter(k != fold_a_testear)
+
+        estimador_NW <- construir_estimador_NW(
+            X = df_train$elevacion,
+            Y = df_train$temp_anual,
+            nombre_nucleo = 'epanechnikov',
+            h = h
+        )
+
+        modelo_lineal <- lm(df_train$elevacion ~ df_train$temp_anual)
+        estimador_lineal <- function(x) {
+            coeff <- modelo_lineal$coefficients
+            coeff[[1]] + coeff[[2]] * x
+        }
+
+        modelo_cuadratico <- lm(df_train$elevacion ~ poly(df_train$temp_anual, 2))
+        estimador_cuadratico <- function(x) {
+            coeff <- modelo_cuadratico$coefficients
+            coeff[[1]] + coeff[[2]] * x + coeff[[3]] * x^2
+        }
+
+        estimaciones_con_estos_h_y_K <- tibble(
+            h = h,
+            fold_testeado = fold_a_testear,
+            x_test = df_test$elevacion,
+            y_test = df_test$temp_anual,
+            y_estimado_nw = as.numeric(map(x_test, estimador_NW)),
+            y_estimado_lineal = as.numeric(map(x_test, estimador_lineal)),
+            y_estimado_cuadratico = as.numeric(map(x_test, estimador_cuadratico)),
+            error_cuadrado_nw = (y_test - y_estimado_nw)^2,
+            error_cuadrado_lineal = (y_test - y_estimado_lineal)^2,
+            error_cuadrado_cuadratico = (y_test - y_estimado_cuadratico)^2,
+        )
+        estimaciones <- bind_rows(estimaciones, estimaciones_con_estos_h_y_K)
+    }
+}
+
+estimaciones_por_h <-
+    estimaciones %>%
+    group_by(h) %>%
+    summarise(
+        error_nw = mean(error_cuadrado_nw),
+        error_lineal = mean(error_cuadrado_lineal),
+        error_cuadratico = mean(error_cuadrado_cuadratico),
+    )
+
+estimaciones_por_h %>%
+    ggplot() +
+    aes(x = h, y = error_nw) +
+    geom_point(shape = 4) +
+    geom_line(alpha = .5) +
+    scale_x_continuous(breaks = seq(40, 350, 10)) +
+    theme(axis.text.x = element_text(angle = 90))
