@@ -4,14 +4,14 @@ output: html_document
 author: Barrera Borla, Berros, Duarte
 ---
 
-Cargamos las librerías del `pulcriverso`.
+Cargamos las librerías del *pulcriverso*.
 
 ```{r}
 library(tidyverse, quietly = TRUE)
 library(glue)
 ```
 
-Leemos los datos y realizamos el scatter-plot de elevación y temperatura anual.
+Leemos los datos y realizamos, construimos un `data-frame` con nombres significativos y tipos adecuados a cada variable para, en base a él,  realizar el scatter-plot de las variables elevación y temperatura anual.
 
 ```{r}
 df <- read_csv(
@@ -41,7 +41,7 @@ ggsave("fig1_dispersion.png", fig1)
 fig1
 ```
 
-Quitamos dos outliers del dataset.
+Siguiendo el criterio de trabajos precedentes, quitamos dos outliers del dataset.
 
 ```{r}
 df <- filter(df, elevacion < 1500)
@@ -86,6 +86,10 @@ estimar_densidad <- function(X, nombre_nucleo, h, x) {
 }
 ```
 
+Estimamos la densidad con todos los nucleos definidos sobre una primera grilla que sencillamente recorre los valores entre el máximo y el mínimo del conjunto de datos. 
+
+En este caso, el bucle *for* recorre la lista de valores tentativos de *h* provista y luego de realizar las estimaciones con ese *h* para cada núcleo produce un gráfico que sintetiza la información obtenida. 
+
 ```{r}
 grilla <- min(df$elevacion):max(df$elevacion)
 
@@ -113,6 +117,10 @@ for (h in c(50, 200, 400)) {
 
 Elegimos el núcleo de Epanechnikov. Vamos a realizar la regresión no paramétrica con el método Nadaraya-Watson.
 
+
+Además de definir este estimador, ensayamos también una función currificada `construir_estimador_de_error_NW_dado_h` que va a ser útil a la hora de realizar la validación del modelo, ya que permite fijar los conjuntos de datos y tomar `h` como única variable, encargándose la función de realizar un proceso de validación cruzada "Validación con un dato fuera" o *LOOCV* por sus siglas inglesas. 
+El costo del proceso es quizás excesivo pero optamos por usarlo en lugar del*K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
+ 
 ```{r}
 construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
     function(x) {
@@ -146,7 +154,7 @@ estimador_de_error_NW_dado_h <-
 optimize(estimador_de_error_NW_dado_h, c(-10, 300))
 ```
 
-Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV).
+Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV) que como se dijo ya es parte de la implementación de `estimador_de_error_NW_segun_h`.
 
 ```{r}
 valores_h <- c(seq(from = 40, to = 1000, by = 50),
