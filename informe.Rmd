@@ -191,6 +191,29 @@ errores_segun_h %>%
 lin <- lm(temp_anual ~ elevacion, df)
 cuad <- lm(temp_anual ~ poly(elevacion, 2), df)
 
+evaluar_modelo_lineal_LOOCV <- function(X,Y){
+    estimador_iesimo <- function(i) {
+        parametros <- unname(coefficients(
+            lm(Y~X,list(X[-i],Y[-i]))
+        ))
+        ordenadaO <- parametros[[1]]
+        pendiente <- parametros[[2]]
+        return (
+            function(x) {pendiente*x+ordenadaO}
+            )
 
+    }
+    estimadores <- map(seq_along(X), estimador_iesimo)
+    predicciones <- pmap_dbl(
+          list(estimador = estimadores, x = X),
+          function(estimador, x) { estimador(x) }
+        )
+        return (mean((Y - predicciones)^2))
+    }
+
+error_lin <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual)
+error_lin
 ```
+
+
 
