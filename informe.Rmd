@@ -1,0 +1,188 @@
+---
+title: "TP-3"
+output: html_document
+author: Barrera Borla, Berros, Duarte
+---
+
+Cargamos las librerías del `pulcriverso`.
+
+```{r}
+library(tidyverse, quietly = TRUE)
+library(glue)
+```
+
+Leemos los datos y realizamos el scatter-plot de elevación y temperatura anual.
+
+```{r}
+df <- read_csv(
+  file = "ortann.csv",
+  col_types = cols(
+    station = col_character(),
+    latitude = col_double(),
+    longitude = col_double(),
+    elevation = col_integer(),
+    tann = col_double()
+  ))
+
+nombres_castellano <- c(
+  "station" = "estacion",
+  "latitude" = "latitud",
+  "longitude" = "longitud",
+  "elevation" = "elevacion",
+  "tann" = "temp_anual")
+
+df <- plyr::rename(df, nombres_castellano)
+
+df %>%
+  ggplot(aes(x = elevacion, y = temp_anual)) +
+  geom_point() -> fig1
+
+ggsave("fig1_dispersion.png", fig1)
+fig1
+```
+
+Quitamos dos outliers del dataset.
+
+```{r}
+df <- filter(df, elevacion < 1500)
+```
+
+Definimos los núcleos para la estimación no paramétrica.
+
+```{r}
+indicadora <- function(z) { ifelse(abs(z) <= 1, 1, 0) }
+
+nucleos <- list(
+    'uniforme' = function(z) { indicadora(z) * (1/2) },
+    'triangular' = function(z) { indicadora(z) * (1 - abs(z)) },
+    'epanechnikov' = function(z) { indicadora(z) * (3/4) * (1 - z^2) },
+    'gaussiano' = function(z) { (1/sqrt(2 * pi)) * exp(-z^2/2) }
+)
+```
+
+Y los graficamos para comprobar que actúan como esperamos.
+
+```{r}
+rango <- seq(-1.1, 1.1, by = 0.01)
+
+tibble(
+  x = rep(rango, each = length(nucleos)),
+  nombre_nucleo = rep(names(nucleos), length(rango)),
+  y =  map2_dbl(nombre_nucleo, x, ~nucleos[[.x]](.y))
+) %>%
+  ggplot(aes(x, y, color = nombre_nucleo)) +
+    geom_line() +
+    coord_fixed() -> fig2
+
+ggsave("fig2_nucleos.png", fig2, width = 6, height = 3.5)
+fig2
+```
+
+```{r}
+estimar_densidad <- function(X, nombre_nucleo, h, x) {
+    n <- length(X)
+    nucleo <- nucleos[[nombre_nucleo]]   
+    sum(nucleo((X - x) / h)) / (2 * n * h)
+}
+```
+
+```{r}
+grilla <- min(df$elevacion):max(df$elevacion)
+
+for (h in c(50, 200, 400)) {
+    tibble(
+        x = rep(grilla, length(names(nucleos))),
+        nucleo = rep(names(nucleos), each = length(grilla)),
+        densidad = map2_dbl(x, nucleo, function(x, nucleo) {
+            estimar_densidad(df$elevacion, nucleo, h, x)
+        })
+    ) %>%
+      ggplot() +
+        aes(x, y = densidad, color = nucleo) +
+        geom_line() +
+        labs(title = glue('h = {h}')) +
+        theme(
+            axis.ticks.y = element_blank(),
+            axis.text.y = element_blank()
+        ) -> fig
+
+    ggsave(glue('fig_densidad_con_h_{h}.png'), fig)
+    print(fig)
+}
+```
+
+Elegimos el núcleo de Epanechnikov. Vamos a realizar la regresión no paramétrica con el método Nadaraya-Watson.
+
+```{r}
+construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
+    function(x) {
+        nucleo <- nucleos[[nombre_nucleo]]   
+        pesos <- nucleo((X - x) / h)
+        weighted.mean(Y, pesos)
+    }
+}
+
+NUCLEO_ELEGIDO <- 'epanechnikov'
+
+construir_estimador_de_error_NW_dado_h <- function(X, Y, nombre_nucleo) {
+    function(h) {
+        estimador_iesimo <- function(i) { construir_estimador_NW(X[-i], Y[-i], nombre_nucleo, h) }
+        estimadores <- map(seq_along(X), estimador_iesimo)
+        predicciones <- pmap_dbl(
+          list(estimador = estimadores, x = X),
+          function(estimador, x) { estimador(x) }
+        )
+        return (mean((Y - predicciones)^2))
+    }
+}
+```
+
+Intentamos utilizar `optimize` para encontrar el `h` que minimiza el error.
+
+```{r}
+estimador_de_error_NW_dado_h <-
+  construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, NUCLEO_ELEGIDO)
+
+optimize(estimador_de_error_NW_dado_h, c(-10, 300))
+```
+
+Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV).
+
+```{r}
+valores_h <- c(seq(from = 40, to = 1000, by = 50),
+               seq(from = 40, to = 350, by = 10),
+               seq(from = 120, to = 190, by = 1))
+
+errores_segun_h <- tibble(
+  h = sort(unique(valores_h)),
+  error_nw = map_dbl(h, estimador_de_error_NW_dado_h)
+)
+
+min_error_nw <- slice(errores_segun_h, which.min(error_nw))
+MEJOR_H <- min_error_nw$h
+
+errores_segun_h %>%
+  filter(!is.na(error_nw)) %>%
+  ggplot(aes(h, error_nw)) +
+    geom_point(shape = 39, size = 3) +
+    geom_line(alpha = .3) +
+    geom_vline(xintercept = MEJOR_H, alpha = .6, linetype = 'dashed', color = 'ForestGreen') +
+    annotate('text', x = MEJOR_H + 1, y = 0.9, label = glue('h = {MEJOR_H}'), color = 'ForestGreen') +
+    labs(title = glue('Error mínimo del estimador N-W con h = {MEJOR_H}')) +
+    scale_x_continuous(breaks = c(seq(100, 200, 20), seq(0, 1000, 100))) +
+    theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+
+# TODO: Seguir con esto! LOOCV con modelos lineal y cuadrático
+# y luego comparar con mejor_error$error_nw
+
+# Estimación paramétrica
+
+lin <- lm(temp_anual ~ elevacion, df)
+cuad <- lm(temp_anual ~ poly(elevacion, 2), df)
+
+
+```
+
