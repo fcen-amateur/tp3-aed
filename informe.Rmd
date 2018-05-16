@@ -88,7 +88,7 @@ estimar_densidad <- function(X, nombre_nucleo, h, x) {
 
 Estimamos la densidad con todos los nucleos definidos sobre una primera grilla que sencillamente recorre los valores entre el máximo y el mínimo del conjunto de datos. 
 
-En este caso, el bucle *for* recorre la lista de valores tentativos de *h* provista y luego de realizar las estimaciones con ese *h* para cada núcleo produce un gráfico que sintetiza la información obtenida. 
+En este caso, el bucle `for` recorre la lista de valores tentativos de `h` provista y luego de realizar las estimaciones con ese `h` para cada núcleo produce un gráfico que sintetiza la información obtenida. 
 
 ```{r}
 grilla <- min(df$elevacion):max(df$elevacion)
@@ -110,7 +110,7 @@ for (h in c(50, 200, 400)) {
             axis.text.y = element_blank()
         ) -> fig
 
-    ggsave(glue('fig_densidad_con_h_{h}.png'), fig)
+    ggsave(glue('fig3_densidad_con_h_{h}.png'), fig, width = 7, height = 4)
     print(fig)
 }
 ```
@@ -118,10 +118,13 @@ for (h in c(50, 200, 400)) {
 Elegimos el núcleo de Epanechnikov. Vamos a realizar la regresión no paramétrica con el método Nadaraya-Watson.
 
 
-Además de definir este estimador, ensayamos también una función currificada `construir_estimador_de_error_NW_dado_h` que va a ser útil a la hora de realizar la validación del modelo, ya que permite fijar los conjuntos de datos y tomar `h` como única variable, encargándose la función de realizar un proceso de validación cruzada "Validación con un dato fuera" o *LOOCV* por sus siglas inglesas. 
-El costo del proceso es quizás excesivo pero optamos por usarlo en lugar del*K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
- 
+Además de definir este estimador, ensayamos también una función currificada `construir_estimador_de_error_NW_dado_h` que va a ser útil a la hora de realizar la validación del modelo, ya que permite fijar los conjuntos de datos y tomar `h` como única variable, encargándose la función de realizar un proceso de validación cruzada "Validación con un dato fuera" o *LOOCV* por sus siglas inglesas.
+
+El costo del proceso es quizás excesivo pero optamos por usarlo en lugar del *K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
+
 ```{r}
+NUCLEO_ELEGIDO <- 'epanechnikov'
+
 construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
     function(x) {
         nucleo <- nucleos[[nombre_nucleo]]   
@@ -129,8 +132,6 @@ construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
         weighted.mean(Y, pesos)
     }
 }
-
-NUCLEO_ELEGIDO <- 'epanechnikov'
 
 construir_estimador_de_error_NW_dado_h <- function(X, Y, nombre_nucleo) {
     function(h) {
@@ -143,31 +144,35 @@ construir_estimador_de_error_NW_dado_h <- function(X, Y, nombre_nucleo) {
         return (mean((Y - predicciones)^2))
     }
 }
-```
 
-Intentamos utilizar `optimize` para encontrar el `h` que minimiza el error.
-
-```{r}
 estimador_de_error_NW_dado_h <-
   construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, NUCLEO_ELEGIDO)
-
-optimize(estimador_de_error_NW_dado_h, c(-10, 300))
 ```
 
-Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV) que como se dijo ya es parte de la implementación de `estimador_de_error_NW_segun_h`.
+Intentamos utilizar `optimize` para encontrar el `h` que minimiza el error, pero el resultado varía según el rango que recibe. Sospechamos que la función se queda en una región "amesetada" alrededor del 370 y sólo puede llegar al verdadero mínimo (alrededor de $150$, como veremos más adelante) si restringimos el rango de valores de `h` en el que busca el extremo:
+```{r}
+
+
+resultado_1 <- optimize(estimador_de_error_NW_dado_h, c(-10, 1000))$minimum
+resultado_2 <- optimize(estimador_de_error_NW_dado_h, c(-10, 250))$minimum # Rango restringido
+
+print(glue('h con error mínimo según "optimize", sin restringir el rango = {round(resultado_1, 2)}'))
+print(glue('h con error mínimo según "optimize", restringiendo el rango = {round(resultado_2, 2)}'))
+```
+
+Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV), que como mencionamos es parte de la implementación de `estimador_de_error_NW_segun_h`.
 
 ```{r}
-valores_h <- c(seq(from = 40, to = 1000, by = 50),
-               seq(from = 40, to = 350, by = 10),
-               seq(from = 120, to = 190, by = 1))
+valores_h <- c(seq(from = 40, to = 1000, by = 50), # Grilla gruesa
+               seq(from = 40, to = 350, by = 10), # Grilla más fina en región candidata
+               seq(from = 120, to = 190, by = 1)) # Grilla muy fina en el lo más hondo del valle
 
 errores_segun_h <- tibble(
   h = sort(unique(valores_h)),
   error_nw = map_dbl(h, estimador_de_error_NW_dado_h)
 )
 
-min_error_nw <- slice(errores_segun_h, which.min(error_nw))
-MEJOR_H <- min_error_nw$h
+MEJOR_H <- slice(errores_segun_h, which.min(error_nw))$h
 
 errores_segun_h %>%
   filter(!is.na(error_nw)) %>%
@@ -177,8 +182,13 @@ errores_segun_h %>%
     geom_vline(xintercept = MEJOR_H, alpha = .6, linetype = 'dashed', color = 'ForestGreen') +
     annotate('text', x = MEJOR_H + 1, y = 0.9, label = glue('h = {MEJOR_H}'), color = 'ForestGreen') +
     labs(title = glue('Error mínimo del estimador N-W con h = {MEJOR_H}')) +
+    ylab('Error cuadrado medio') +
     scale_x_continuous(breaks = c(seq(100, 200, 20), seq(0, 1000, 100))) +
-    theme(axis.text.x = element_text(angle = 90))
+    theme(axis.text.x = element_text(angle = 90),
+          axis.ticks.y = element_blank()) -> fig
+
+ggsave('fig4_error_NW_segun_h.png', fig, width = 7, height = 4)
+fig
 ```
 
 ```{r}
