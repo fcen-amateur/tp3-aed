@@ -3,17 +3,18 @@ title: "TP-3"
 output: html_document
 author: Barrera Borla, Berros, Duarte
 ---
+# Preliminares
 
 Cargamos las librerías del *pulcriverso*.
 
-```{r}
+```{r inicialización}
 library(tidyverse, quietly = TRUE)
 library(glue)
 ```
 
 Leemos los datos y realizamos, construimos un `data-frame` con nombres significativos y tipos adecuados a cada variable para, en base a él,  realizar el scatter-plot de las variables elevación y temperatura anual.
 
-```{r}
+```{r ingreso de datos, cache=T}
 df <- read_csv(
   file = "ortann.csv",
   col_types = cols(
@@ -43,13 +44,18 @@ fig1
 
 Siguiendo el criterio de trabajos precedentes, quitamos dos outliers del dataset.
 
-```{r}
+```{r eliminación de atípicos}
 df <- filter(df, elevacion < 1500)
 ```
+# Estimación No Paramétrica
+
+## Implementación del Estimador de Nadaraya Watson
+
+### Definición de los Núcleos
 
 Definimos los núcleos para la estimación no paramétrica.
 
-```{r}
+```{r núcleos}
 indicadora <- function(z) { ifelse(abs(z) <= 1, 1, 0) }
 
 nucleos <- list(
@@ -62,7 +68,7 @@ nucleos <- list(
 
 Y los graficamos para comprobar que actúan como esperamos.
 
-```{r}
+```{r gráfico de los núcleos, cache=T}
 rango <- seq(-1.1, 1.1, by = 0.01)
 
 tibble(
@@ -77,6 +83,8 @@ tibble(
 ggsave("fig2_nucleos.png", fig2, width = 6, height = 3.5)
 fig2
 ```
+
+### Estimador de la Densidad
 
 ```{r}
 estimar_densidad <- function(X, nombre_nucleo, h, x) {
@@ -115,6 +123,8 @@ for (h in c(50, 200, 400)) {
 }
 ```
 
+### Implementación de la Regresión No Paramétrica
+
 Elegimos el núcleo de Epanechnikov. Vamos a realizar la regresión no paramétrica con el método Nadaraya-Watson.
 
 
@@ -122,7 +132,7 @@ Además de definir este estimador, ensayamos también una función currificada `
 
 El costo del proceso es quizás excesivo pero optamos por usarlo en lugar del *K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
 
-```{r}
+```{r implementación de la regresión no paramétrica}
 NUCLEO_ELEGIDO <- 'epanechnikov'
 
 construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
@@ -149,6 +159,8 @@ estimador_de_error_NW_dado_h <-
   construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, NUCLEO_ELEGIDO)
 ```
 
+#### Buscamos una Referencia sobre el mejor *h*
+
 Intentamos utilizar `optimize` para encontrar el `h` que minimiza el error, pero el resultado varía según el rango que recibe. Sospechamos que la función se queda en una región "amesetada" alrededor del 370 y sólo puede llegar al verdadero mínimo (alrededor de $150$, como veremos más adelante) si restringimos el rango de valores de `h` en el que busca el extremo:
 ```{r}
 
@@ -160,9 +172,11 @@ print(glue('h con error mínimo según "optimize", sin restringir el rango = {ro
 print(glue('h con error mínimo según "optimize", restringiendo el rango = {round(resultado_2, 2)}'))
 ```
 
-Vamos a buscar el valor de `h` óptimo con el método Leave-one-out cross validation (LOOCV), que como mencionamos es parte de la implementación de `estimador_de_error_NW_segun_h`.
+#### Buscamos el mejor *h* con una implementación propia
 
-```{r}
+Vamos a buscar el valor de *h* óptimo con el método Leave-one-out cross validation (LOOCV), que como mencionamos es parte de la implementación de `estimador_de_error_NW_segun_h`.
+
+```{r LOOCV para NW, cache=T }
 valores_h <- c(seq(from = 40, to = 1000, by = 50), # Grilla gruesa
                seq(from = 40, to = 350, by = 10), # Grilla más fina en región candidata
                seq(from = 120, to = 190, by = 1)) # Grilla muy fina en el lo más hondo del valle
@@ -189,41 +203,93 @@ errores_segun_h %>%
 
 ggsave('fig4_error_NW_segun_h.png', fig, width = 7, height = 4)
 fig
+
+modelo_no_parametrico <- construir_estimador_NW( df$elevacion, df$temp_anual, NUCLEO_ELEGIDO, 155 )
+modelo_no_parametrico(5)
 ```
 
-```{r}
-
-# TODO: Seguir con esto! LOOCV con modelos lineal y cuadrático
-# y luego comparar con mejor_error$error_nw
 
 # Estimación paramétrica
 
-lin <- lm(temp_anual ~ elevacion, df)
-cuad <- lm(temp_anual ~ poly(elevacion, 2), df)
+Vamos a comprar nuestro modelo no paramétrico con sus antagonistas paramétricos ajustando varios polinomios por `lm` y obteniendo su error por procedimientos similares. 
+Primero vamos a definir una función `polinomio_dados_coeficientes` para poder aprovechar la salida del comando `lm`.
 
-evaluar_modelo_lineal_LOOCV <- function(X,Y){
-    estimador_iesimo <- function(i) {
-        parametros <- unname(coefficients(
-            lm(Y~X,list(X[-i],Y[-i]))
-        ))
-        ordenadaO <- parametros[[1]]
-        pendiente <- parametros[[2]]
-        return (
-            function(x) {pendiente*x+ordenadaO}
-            )
+```{r estimaciones por lm, cache=T}
 
-    }
-    estimadores <- map(seq_along(X), estimador_iesimo)
-    predicciones <- pmap_dbl(
-          list(estimador = estimadores, x = X),
-          function(estimador, x) { estimador(x) }
-        )
-        return (mean((Y - predicciones)^2))
-    }
+polinomio_dados_coeficientes <- function(coeficientes) {
+  polinomio <- function(x) {
+    sum(
+      pmap_dbl(
+        list( i = seq_along(coeficientes), coeficiente = coeficientes ),
+        function(i,coeficiente) {coeficiente * x^(i - 1)}
+      )
+    )
+  }
+  return(polinomio)
+}  
 
-error_lin <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual)
+evaluar_modelo_lineal_LOOCV <- function(X,Y,grado){
+  estimador_iesimo <- function(i) {
+    coeficientes <- coefficients(
+      lm(Y~poly(X,degree=grado,raw=T),list(X[-i],Y[-i]))
+      )
+    return ( polinomio_dados_coeficientes(coeficientes) )
+
+  }
+  estimadores <- map(seq_along(X), estimador_iesimo)
+  predicciones <- pmap_dbl(
+    list(estimador = estimadores, x = X),
+    function(estimador, x) { estimador(x) }
+  )
+  return (mean((Y - predicciones)^2))
+}
+
+error_lin <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,1)
+error_cuad <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,2)
+
 error_lin
+error_cuad
+estimador_de_error_NW_dado_h(155)
+
+modelo_lineal <- polinomio_dados_coeficientes (unname ( coefficients (
+  lm (temp_anual ~ poly(elevacion, degree = 1,raw=T), list(elevacion = df$elevacion,temp_anual = df$temp_anual))
+  ) ) )
+
+modelo_cuadratico <- polinomio_dados_coeficientes (unname ( coefficients (
+  lm (temp_anual ~ poly(elevacion, degree = 2,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
+  ) ) )
+
+modelo_grado_alto <- polinomio_dados_coeficientes (unname ( coefficients (
+  lm (temp_anual ~ poly(elevacion, degree = 10,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
+  ) ) )
+
+
+error_grado_alto <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,10)
+error_grado_alto
+
 ```
 
 
+```{r gráfico encimado de los modelos, cache=T}
 
+rango <- seq(min(df$elevacion),max(df$elevacion), by = 10)
+
+modelos <- list(
+  'lineal' = modelo_lineal,
+  'cuadrático' = modelo_cuadratico,
+  'grado diez' = modelo_grado_alto,
+  'no paramétrico' = modelo_no_parametrico
+)
+
+tabla_modelos <- tibble(
+  x = rep(rango, each = length(modelos)),
+  nombre_modelo = rep(names(modelos), length(rango)),
+  y =  map2_dbl(nombre_modelo, x, ~modelos[[.x]](.y))
+) 
+  ggplot(tabla_modelos,aes(x, y)) +
+    geom_line(aes(color=nombre_modelo)) +
+    geom_point(data = df, aes( x = elevacion, y = temp_anual)) -> figComparacion
+
+ggsave("figComparacion.png", figComparacion, width = 10, height = 10)
+figComparacion
+```
