@@ -1,18 +1,22 @@
 ---
-title: "TP-3"
-output: html_document
-author: Barrera Borla, Berros, Duarte
+title: "TP2 Análisis Exploratorio de Datos"
+author: "Juan Manuel Berros, Octavio M. Duarte y Gonzalo Barrera Borla"
+date: "16 de Mayo de 2018"
+output:
+  html_document: default
+  pdf_document: default
 ---
 # Preliminares
 
 Cargamos las librerías del *pulcriverso*.
 
-```{r inicialización}
+```{r inicialización, include = FALSE}
 library(tidyverse, quietly = TRUE)
-library(glue)
+library(stringr)
+library(knitr)
 ```
 
-Leemos los datos y realizamos, construimos un `data-frame` con nombres significativos y tipos adecuados a cada variable para, en base a él,  realizar el scatter-plot de las variables elevación y temperatura anual.
+Leemos los datos y construimos un `data-frame` con nombres significativos y tipos adecuados a cada variable. En base a él, realizamos el diagrama de dispersión para las variables "elevación" y "temperatura anual".
 
 ```{r ingreso de datos, cache=T}
 df <- read_csv(
@@ -36,16 +40,35 @@ df <- plyr::rename(df, nombres_castellano)
 
 df %>%
   ggplot(aes(x = elevacion, y = temp_anual)) +
-  geom_point() -> fig1
+  geom_point() +
+  labs(title = "Fig. 1: Temperatura anual promedio y elevación.",
+        y = "Temperatura anual promedio", x = "Elevación") -> fig1
 
 ggsave("fig1_dispersion.png", fig1)
 fig1
 ```
 
-Siguiendo el criterio de trabajos precedentes, quitamos dos outliers del dataset.
+Los métodos de estimación no paramétrica que veremos en breve tienen un parámetro clave, $h$, que determina cuán "cerca" de un valor $x^{*}$ deben estar las observaciones $x_{i}$ de entrenamiento para considerarlas a la hora de predecir $y^{*}$. Luego, el mínimo $h$ para que no haya "agujeros" en el rango de los $x^{*}$ pra los cuales se pueden formular predicciones, será directamente proporcional a la máxima distancia entre dos valores consecutivos de $x_{i}$.
+
+Mirando la figura 1, vemos que los dos puntos de mayor elevación, están peligrosamente lejos del resto. Veamos cómo se distribuyen las distancias entre valores consecutivos de `elevacion`
+
+```{r}
+df %>%
+  arrange(desc(elevacion)) %>%
+  mutate(
+    par_consecutivo = paste(estacion, lead(estacion), sep = "-"),
+    delta_elevaciones = elevacion - lead(elevacion)) %>%
+  select(par_consecutivo, delta_elevaciones) %>%
+  arrange(desc(delta_elevaciones)) %>%
+  head() -> distancias
+
+kable(x = distancias, caption = "Tabla 1: Distancia entre pares consecutivos de estaciones.")
+```
+
+Como previmos en el diagrama de dispersión, hay dos estaciones, "CLK" y "HAR", que están a distancias mucho mayores de la siguiente estación hacia abajo que las demás. Las eliminaremos del conjunto de análisis.
 
 ```{r eliminación de atípicos}
-df <- filter(df, elevacion < 1500)
+df <- filter(df, estacion !="CLK", estacion !="HAR")
 ```
 # Estimación No Paramétrica
 
@@ -62,7 +85,7 @@ nucleos <- list(
     'uniforme' = function(z) { indicadora(z) * (1/2) },
     'triangular' = function(z) { indicadora(z) * (1 - abs(z)) },
     'epanechnikov' = function(z) { indicadora(z) * (3/4) * (1 - z^2) },
-    'gaussiano' = function(z) { (1/sqrt(2 * pi)) * exp(-z^2/2) }
+    'gaussiano' = function(z) { (1/sqrt(2 * pi)) * exp(-z^2/2) } # exactamente equivalente a dnorm(z)
 )
 ```
 
@@ -70,15 +93,17 @@ Y los graficamos para comprobar que actúan como esperamos.
 
 ```{r gráfico de los núcleos, cache=T}
 rango <- seq(-1.1, 1.1, by = 0.01)
+aplicar_nucleo <- function(nombre_nucleo, x) { nucleos[[nombre_nucleo]](x) }
 
-tibble(
-  x = rep(rango, each = length(nucleos)),
-  nombre_nucleo = rep(names(nucleos), length(rango)),
-  y =  map2_dbl(nombre_nucleo, x, ~nucleos[[.x]](.y))
-) %>%
+cross_df(.l = list(
+  x = rango,
+  nombre_nucleo = names(nucleos))) %>%
+  mutate(y = pmap_dbl(list(nombre_nucleo, x), aplicar_nucleo)) %>%
   ggplot(aes(x, y, color = nombre_nucleo)) +
-    geom_line() +
-    coord_fixed() -> fig2
+  geom_line() +
+  labs(title = "Fig. 2: Núcleos considerados, en el intervalo [-1, 1]",
+       color = "Núcleo 'K'", y = "K(x)") +
+  coord_fixed() -> fig2
 
 ggsave("fig2_nucleos.png", fig2, width = 6, height = 3.5)
 fig2
@@ -86,251 +111,308 @@ fig2
 
 ### Estimador de la Densidad
 
+Antes de intentar la regresión no paramétrica, intentamos estimar la densidad de la variable `elevacion` usando distintos núcleos y $h$. Recordemos que la funcion de densidad estimada para la una variable aleatoria $X$, usando un núcleo $K$ y un ancho de banda $h$ es:
+
+$$
+\hat{f_{X}}(x) = \frac{1}{n \times h} \times \sum_{i = 1}^{n} \left[ K \left( \frac{x_{i}- x}{h} \right) \right]
+$$
+
 ```{r}
-estimar_densidad <- function(X, nombre_nucleo, h, x) {
+estimador_densidad <- function(X, nombre_nucleo, h, x) {
     n <- length(X)
     nucleo <- nucleos[[nombre_nucleo]]   
     sum(nucleo((X - x) / h)) / (2 * n * h)
 }
 ```
 
-Estimamos la densidad con todos los nucleos definidos sobre una primera grilla que sencillamente recorre los valores entre el máximo y el mínimo del conjunto de datos. 
+Estimamos la densidad para cada núcleo definido sobre una primera grilla que sencillamente recorre los valores entre el máximo y el mínimo del conjunto de datos. 
 
-En este caso, el bucle `for` recorre la lista de valores tentativos de `h` provista y luego de realizar las estimaciones con ese `h` para cada núcleo produce un gráfico que sintetiza la información obtenida. 
+```{r densidad elelevacion para h seleccionados, cache = T}
+elevacion <- df$elevacion
+grilla <- min(elevacion):max(elevacion)
+h_prueba <- c(50L, 200L, 400L)
 
-```{r}
-grilla <- min(df$elevacion):max(df$elevacion)
-
-for (h in c(50, 200, 400)) {
-    tibble(
-        x = rep(grilla, length(names(nucleos))),
-        nucleo = rep(names(nucleos), each = length(grilla)),
-        densidad = map2_dbl(x, nucleo, function(x, nucleo) {
-            estimar_densidad(df$elevacion, nucleo, h, x)
-        })
-    ) %>%
-      ggplot() +
-        aes(x, y = densidad, color = nucleo) +
-        geom_line() +
-        labs(title = glue('h = {h}')) +
-        theme(
-            axis.ticks.y = element_blank(),
-            axis.text.y = element_blank()
-        ) -> fig
-
-    ggsave(glue('fig3_densidad_con_h_{h}.png'), fig, width = 7, height = 4)
-    print(fig)
+# Construimos el estimador de densidad para los datos de elevación
+estimador_densidad_elevacion <- function(...) {
+  estimador_densidad(X = elevacion, ...)
 }
+
+# `cross_df` devuelve el producto cartesiano de los vectores de `.l`  en forma de dataframe (por eso el sufijo _df)
+cross_df(.l = list(
+  nombre_nucleo = names(nucleos),
+  h = h_prueba,
+  x = grilla)) %>%
+  mutate(
+    # pmap llama la función .f para cada tupla de elementos presente en .l (nombre_nucleo, h, x),
+    # y con el sufijo _dbl devuelve un vector de valores de punto flotate.
+    densidad = pmap_dbl(.l = list(nombre_nucleo, h, x),
+                        .f = estimador_densidad_elevacion)) -> densidades
 ```
+
+La tabla de `densidades` tendrá `r dim(densidades)[[1]]` filas, que provienen del producto cartesiano de `r length(grilla)` valores de la grilla de elevaciones $\times$ `r length(h_prueba)` anchos de banda $\times$ `r length(nucleos)` núcleos evaluados. Veamos cómo se comporta cada núcleo, escalando la densidad para que sea comparable con el histograma:
+
+```{r comparacion_nucleos, fig.height = 12, cache = T}
+agregar_h <- function(df, h) {df %>% mutate(h = h)}
+
+map_df(h_prueba, ~agregar_h(df, .)) %>%
+  ggplot(mapping = aes(x = elevacion, alpha = 0.1)) +
+  geom_histogram(bins = 30) +
+  geom_line(data = densidades, mapping = aes(x = x, y = densidad*10600, color = nombre_nucleo), inherit.aes = F) +
+  facet_grid(h ~ .) +
+  guides(alpha = F) +
+  labs(title = "Fig. 3: Curvas de densidad para distintos núcleos y h",
+       subtitle = "La superposición sobre el histograma permite comprender cómo h cambia la 'suavidad' de la estimación.",
+       y = "Conteo / 10600 * K(x)", color = "Núcleo 'K'") -> fig3
+
+ggsave("fig3_nucleos_h.png", fig3, width = 7, height = 12)
+fig3
+```
+
 
 ### Implementación de la Regresión No Paramétrica
 
-Elegimos el núcleo de Epanechnikov. Vamos a realizar la regresión no paramétrica con el método Nadaraya-Watson.
+Sea $g(x)$ la esperanza condicional de una VA $Y$ para un valor dado de $X$. Una forma de estimar $g$, es calculando la densidad condicional de $Y$ usando la función de densidad conjunta para $(X,Y)$. Usando el estimador de NW para las funciones de densidad, obtenemos:
+$$
+\hat{g}(x) = \hat{E}(Y|X=x) = \frac{\sum_{i = 1}^{n} \left[ K \left( \frac{x_{i}- x}{h} \right) \times y_{i} \right]}{\sum_{i = 1}^{n} \left[ K \left( \frac{x_{i}- x}{h} \right) \right]}
+$$
 
+... que no es más que un promedio de los $y_{i}$ ponderado por los valores de $K$ evaluados en $(x_{i}- x) / {h}$.
 
-Además de definir este estimador, ensayamos también una función currificada `construir_estimador_de_error_NW_dado_h` que va a ser útil a la hora de realizar la validación del modelo, ya que permite fijar los conjuntos de datos y tomar `h` como única variable, encargándose la función de realizar un proceso de validación cruzada "Validación con un dato fuera" o *LOOCV* por sus siglas inglesas.
+La función $\hat{g}(x)$ está parametrizada por $Y, X, h$. Ya sabemos que $Y$ es la temperatura anual y $X$ es la elevación, pero aún nos falta definir $h$. Tal como lo hicimos con la regresión lineal, elegiremos el $h$ que minimice el error cuadrático medio de la estimación.
 
-El costo del proceso es quizás excesivo pero optamos por usarlo en lugar del *K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
+Para ello, ensayamos una función currificada `construir_estimador_de_error_NW_dado_h` que dado un $h$ y un núcleo, devuelve el error cuadrático medio correspondiente al usar "Validación con un dato fuera" (o *LOOCV* por sus siglas inglesas) como método de evaluación.
+
+El costo del proceso es quizás excesivo pero optamos por usar *LOOCV* en lugar del *K-Fold* porque garantiza estabilidad en los resultados y eso es fundamental a la hora de aclimatarse con una herramienta como esta, además de que la exigüidad de los datos lo hace posible.
 
 ```{r implementación de la regresión no paramétrica}
-NUCLEO_ELEGIDO <- 'epanechnikov'
-
+# El estimador de la esperanza condicional de Y para X = x segun NW es un promedio ponderado de los Y
 construir_estimador_NW <- function(X, Y, nombre_nucleo, h) {
-    function(x) {
-        nucleo <- nucleos[[nombre_nucleo]]   
-        pesos <- nucleo((X - x) / h)
-        weighted.mean(Y, pesos)
+  nucleo <- nucleos[[nombre_nucleo]]   
+  function(x) {
+    pesos <- nucleo((X - x) / h)
+    
+    return(weighted.mean(Y, pesos))
+  }
+}
+
+
+construir_estimador_de_error_NW <- function(X, Y) {
+  function(nombre_nucleo, h) {
+    # Bajo LOOCV, el estimador de NW para usar en el i-esimo dato, 
+    # debe ser entrenado en todos los datos salvo el i-ésimo
+    estimador_iesimo <- function(i) { construir_estimador_NW(X[-i], Y[-i], nombre_nucleo, h) }
+    estimadores <- map(seq_along(X), estimador_iesimo)
+    
+    # Las predicciones resultan de aplicar el i-ésimo estimador, al i-ésimo valor de X.
+    predicciones <- pmap_dbl(
+      list(estimador = estimadores, x = X),
+      function(estimador, x) { estimador(x) }
+    )
+    
+    return (mean((Y - predicciones)^2))
     }
 }
 
-construir_estimador_de_error_NW_dado_h <- function(X, Y, nombre_nucleo) {
-    function(h) {
-        estimador_iesimo <- function(i) { construir_estimador_NW(X[-i], Y[-i], nombre_nucleo, h) }
-        estimadores <- map(seq_along(X), estimador_iesimo)
-        predicciones <- pmap_dbl(
-          list(estimador = estimadores, x = X),
-          function(estimador, x) { estimador(x) }
-        )
-        return (mean((Y - predicciones)^2))
-    }
-}
-
-estimador_de_error_NW_dado_h <-
-  construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, NUCLEO_ELEGIDO)
+# Parametrizamos el estimador con los datos de elevación y temp_anual
+estimador_de_error_NW <-
+  construir_estimador_de_error_NW(X = df$elevacion, Y = df$temp_anual)
 ```
 
-#### Buscamos una Referencia sobre el mejor *h*
+Armados de una función para comparar los estimadores, los evaluamos para las 4000 combinaciones de parámetros que surgen de combinar 1000 valores de $h$ y 4 núcleos:
 
-Intentamos utilizar `optimize` para encontrar el `h` que minimiza el error, pero el resultado varía según el rango que recibe. Sospechamos que la función se queda en una región "amesetada" alrededor del 370 y sólo puede llegar al verdadero mínimo (alrededor de $150$, como veremos más adelante) si restringimos el rango de valores de `h` en el que busca el extremo:
+```{r ecm_por_nucleo_y_h, cache = T}
+cross_df(.l = list(nombre_nucleo = names(nucleos), h = 1:1000)) %>%
+  mutate( ecm = pmap_dbl(.l = list(nombre_nucleo, h),
+                        .f = estimador_de_error_NW)) %>%
+  filter(!is.na(ecm)) -> errores
+
+errores %>%
+  ggplot(aes(x = h, y = ecm, color = nombre_nucleo)) +
+  geom_line() +
+  labs(title = "Fig. 4: Comportamiento comparativo de los núcleos en función de h",
+       y = "Error Cuadrático Medio", color = "Núcleo 'K'") -> fig4
+
+ggsave("fig4_ecm_por_nucleo_y_h.png", fig4)
+fig4
+```
+
+A primera vista, pareciera que los mínimos ECM por núcleo están en el rango $[50, 250]$, por lo cual conviene restringir el gráfico a dicha sección. Además, podemos manipular la tabla de errores por núcleo y h para obtener los anchos de banda óptimos por núcleo:
+
 ```{r}
+errores %>%
+  group_by(nombre_nucleo) %>%
+  filter(rank(ecm) == 1) %>% 
+  ungroup() -> minimos_por_nucleo
 
-
-resultado_1 <- optimize(estimador_de_error_NW_dado_h, c(-10, 1000))$minimum
-resultado_2 <- optimize(estimador_de_error_NW_dado_h, c(-10, 250))$minimum # Rango restringido
-
-print(glue('h con error mínimo según "optimize", sin restringir el rango = {round(resultado_1, 2)}'))
-print(glue('h con error mínimo según "optimize", restringiendo el rango = {round(resultado_2, 2)}'))
+kable(minimos_por_nucleo, digits = 5)
 ```
 
-#### Buscamos el mejor *h* con una implementación propia
+Aunque el h óptimo por núcleo varía considerablemente, vemos que el valor del ECM mínimo no lo hace tanto. A continuación, una comparación gráfica:
 
-Vamos a buscar el valor de *h* óptimo con el método Leave-one-out cross validation (LOOCV), que como mencionamos es parte de la implementación de `estimador_de_error_NW_segun_h`.
+```{r minimos ecm por nucleo, cache = T}
+minimos_por_nucleo <- minimos_por_nucleo %>%
+  mutate(etiqueta = str_c("ECM: ", round(ecm, 3), " (h = ", h, ")"))
 
-```{r LOOCV para NW, cache=T }
-valores_h <- c(seq(from = 40, to = 1000, by = 50), # Grilla gruesa
-               seq(from = 40, to = 350, by = 10), # Grilla más fina en región candidata
-               seq(from = 120, to = 190, by = 1)) # Grilla muy fina en el lo más hondo del valle
+fig4 +
+  geom_vline(data = minimos_por_nucleo,
+             mapping = aes(xintercept = h, color = nombre_nucleo), lty = "dashed", size = 0.3) +
+  geom_text(data = minimos_por_nucleo,
+            mapping = aes(label = etiqueta, x = h, y = c(0.775, 0.75, 0.725, 0.7)), size = 2.5, color = "black") +
+  coord_cartesian(xlim = c(50,400), ylim = c(0.7, 1.2)) +
+  labs(title = "Fig. 5: Comportamiento comparativo, enfocado y anotado") -> fig5
 
-errores_segun_h <- tibble(
-  h = sort(unique(valores_h)),
-  error_nw = map_dbl(h, estimador_de_error_NW_dado_h)
-)
-
-MEJOR_H <- slice(errores_segun_h, which.min(error_nw))$h
-
-errores_segun_h %>%
-  filter(!is.na(error_nw)) %>%
-  ggplot(aes(h, error_nw)) +
-    geom_point(shape = 39, size = 3) +
-    geom_line(alpha = .3) +
-    geom_vline(xintercept = MEJOR_H, alpha = .6, linetype = 'dashed', color = 'ForestGreen') +
-    annotate('text', x = MEJOR_H + 1, y = 0.9, label = glue('h = {MEJOR_H}'), color = 'ForestGreen') +
-    labs(title = glue('Error mínimo del estimador N-W con h = {MEJOR_H}')) +
-    ylab('Error cuadrado medio') +
-    scale_x_continuous(breaks = c(seq(100, 200, 20), seq(0, 1000, 100))) +
-    theme(axis.text.x = element_text(angle = 90),
-          axis.ticks.y = element_blank()) -> fig
-
-ggsave('fig4_error_NW_segun_h.png', fig, width = 7, height = 4)
-fig
-
-modelo_no_parametrico <- construir_estimador_NW( df$elevacion, df$temp_anual, NUCLEO_ELEGIDO, 155 )
-
+ggsave("fig5_h_optimo_por_nucleo.png", fig5)
+fig5
 ```
 
-#### Estimamos por Otro Núcleo
 
-De esta forma, nos cercioramos de que el resultado obtenido es representativo. Seguimos un procedimiento similar (cambiando la variable `NUCLEO_ELEGIDO`) y hallamos que en ese caso el *h* óptimo es 98,87. Como se ve el cambio de nucleo no impacta sobre el rendimiento de la regresión.   
-
-```{r modelo Gaussiano, cache=T}
-
-modelo_no_parametrico2 <- construir_estimador_NW( df$elevacion, df$temp_anual, 'gaussiano', 98.87 )
-
-estimador_de_error_NW_dado_h2 <-
-  construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, 'gaussiano')
-
-error_gaussiano <- estimador_de_error_NW_dado_h2(98.87)
-error_gaussiano
-```
 # Estimación paramétrica
 
 Vamos a comprar nuestro modelo no paramétrico con sus antagonistas paramétricos ajustando varios polinomios por `lm` y obteniendo su error por procedimientos similares. 
+
 Primero vamos a definir una función `polinomio_dados_coeficientes` para poder aprovechar la salida del comando `lm`.
 
+Luego, tal como hicimos con el ancho de banda $h$ para el estimador de Nadaraya-Watson, escribimos una función que dado un grado $g$ para la regresión polinómica, nos devuelva el ECM calculado por LOOCV, y graficamos los resultados.
 ```{r estimaciones por lm, cache=T}
 
 polinomio_dados_coeficientes <- function(coeficientes) {
-  polinomio <- function(x) {
-    sum(
-      pmap_dbl(
-        list( i = seq_along(coeficientes), coeficiente = coeficientes ),
-        function(i,coeficiente) {coeficiente * x^(i - 1)}
-      )
-    )
+  function(x) {
+    # El polinomio tendra tantos terminos como coeficientes se pasen
+    terminos <- vector("numeric", length(coeficientes))
+    for (n in seq_along(coeficientes)) {
+      # El n-ésimo término es el producto del n-ésimo coeficiente y x elevado a la n-1
+      terminos[[n]] <- coeficientes[[n]] * x^(n-1)
+    }
+    return(sum(terminos))
   }
-  return(polinomio)
-}  
+}
 
-evaluar_modelo_lineal_LOOCV <- function(X,Y,grado){
+evaluar_modelo_lineal_LOOCV <- function(X, Y, grado) {
   estimador_iesimo <- function(i) {
-    coeficientes <- coefficients(
-      lm(Y~poly(X,degree=grado,raw=T),list(X[-i],Y[-i]))
-      )
-    return ( polinomio_dados_coeficientes(coeficientes) )
+    # Bajo LOOCV, el estimador de NW para usar en el i-esimo dato, 
+    # debe ser entrenado en todos los datos salvo el i-ésimo
+    modelo <- lm(Y ~ poly(X , degree = grado, raw = T),
+         list(X = X[-i], Y = Y[-i]))
+    
+    # El estimador no es más que el polinomio de grado `grado` con los coeficientes ajustados
+    return ( polinomio_dados_coeficientes(modelo$coefficients) )
 
   }
+  # Al i-ésimo valor de X le corresponde el estimador i-ésimo
   estimadores <- map(seq_along(X), estimador_iesimo)
+  
   predicciones <- pmap_dbl(
     list(estimador = estimadores, x = X),
     function(estimador, x) { estimador(x) }
   )
+
+  # Devolvemos el promedio de los length(X) ECMs
   return (mean((Y - predicciones)^2))
 }
 
-error_lin <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,1)
-error_cuad <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,2)
-error_NW <- estimador_de_error_NW_dado_h(155)
+evaluar_modelo_lineal_en_g <- function(g) {
+  evaluar_modelo_lineal_LOOCV(X = df$elevacion, Y = df$temp_anual, grado = g)
+}
 
-error_lin
-error_cuad
-error_NW
+errores_lineales <- tibble(
+  grado = 1L:12L,
+  ecm = map_dbl(grado, evaluar_modelo_lineal_en_g))
 
-modelo_lineal <- polinomio_dados_coeficientes (unname ( coefficients (
-  lm (temp_anual ~ poly(elevacion, degree = 1,raw=T), list(elevacion = df$elevacion,temp_anual = df$temp_anual))
-  ) ) )
+kable(errores_lineales, digits = 5)
+```
+```{r}
+minimo_error_lineal <- filter(errores_lineales, near(ecm, min(ecm)))
 
-modelo_cuadratico <- polinomio_dados_coeficientes (unname ( coefficients (
-  lm (temp_anual ~ poly(elevacion, degree = 2,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
-  ) ) )
+errores_lineales %>%
+  ggplot(aes(grado, ecm)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = 1:12, minor_breaks = NULL) +
+  geom_point(minimo_error_lineal, mapping = aes(y = ecm, x = grado), color = "red") +
+  geom_text(minimo_error_lineal, mapping = aes(
+    y = ecm + 0.2, x = grado, 
+    label = str_c("ECM: ", round(ecm, 3), " (g = ", grado, ")"))) +
+    labs(title = "Fig. 6: ECM de la regresión lineal según el grado del polinomio",
+       y = "Error Cuadrático Medio", x = "Grado 'g' del polinomio") -> fig6
 
-modelo_grado_alto <- polinomio_dados_coeficientes (unname ( coefficients (
-  lm (temp_anual ~ poly(elevacion, degree = 13,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
-  ) ) )
+ggsave("fig6_ecm_modelo_lineal.png", fig6)
+fig6
 
-error_grado_alto <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,13)
-error_grado_alto
+```
 
-error_polinomios <- tibble(
-  grado = seq(1,20),
-  error = map_dbl(grado,~evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,.x))
-)
+Resulta ser que un polinomio de grado 3 sobre `elevacion` es quien mejor se ajusta a los datos: para grados superiores, la regresión sobreajusta y no predice bien datos no observados.
 
-error_polinomios
+
+Para concluir, veamos en una misma tabla y gráfico los ECM obtenidos por LOOCV para modelos no paramétricos con sus h óptimos, y polinomios de bajo grado:
+```{r}
+minimos_por_nucleo %>% 
+  mutate(modelo = str_c("NW c/ núcleo ", nombre_nucleo, " (h = ", h, ")")) %>%
+  select(modelo, ecm) -> resumen_no_parametricos
+
+errores_lineales %>%
+  filter(grado <= 3) %>%
+  mutate(modelo = str_c("Polinomio de grado ", grado)) %>%
+  select(modelo, ecm) -> resumen_polinomios
+
+resumen_no_parametricos %>%
+  bind_rows(resumen_polinomios) %>%
+  arrange(ecm) -> resumen_general
+
+kable(resumen_general, digits = 5)
 ```
 
 
 ```{r gráfico encimado de los modelos, cache=T}
 
-rango <- seq(min(df$elevacion),max(df$elevacion), by = 1)
+estimador_no_parametrico <- function(nombre_nucleo, h) {
+  construir_estimador_NW(df$elevacion, df$temp_anual, nombre_nucleo, h)
+}
 
-modelos <- list(
-  'lineal' = modelo_lineal,
-  'cuadrático' = modelo_cuadratico,
-  'grado trece' = modelo_grado_alto,
-  'no paramétrico' = modelo_no_parametrico
-)
+estimador_polinomico <- function(g){
+  modelo <- lm(temp_anual ~ poly(elevacion, g, raw = TRUE), df)
+  return(polinomio_dados_coeficientes(modelo$coefficients))
+}
 
-tabla_modelos <- tibble(
-  x = rep(rango, each = length(modelos)),
-  nombre_modelo = rep(names(modelos), length(rango)),
-  y =  map2_dbl(nombre_modelo, x, ~modelos[[.x]](.y))
-) 
-  ggplot(tabla_modelos,aes(x, y)) +
-    geom_line(aes(color=nombre_modelo)) +
-    geom_point(data = df, aes( x = elevacion, y = temp_anual)) -> figComparacion
+estimadores_no_parametricos <- minimos_por_nucleo %>%
+  mutate(
+    modelo = str_c("NW c/ núcleo ", nombre_nucleo, " (h = ", h, ")"),
+    estimador = map2(nombre_nucleo, h, estimador_no_parametrico))
+  
+estimadores_polinomicos <- tibble(
+  grado = 1:3,
+  modelo = str_c("Polinomio de grado ", grado),
+  estimador = map(1:3, estimador_polinomico))
 
-ggsave("figComparacion.png", figComparacion, width = 10, height = 10)
-figComparacion
+estimadores <- bind_rows(estimadores_no_parametricos, estimadores_polinomicos)
+
+agregar_x <- function(df, x) {df %>% mutate(x = x)}
+aplicar_estimador <- function(estimador, x) { estimador(x) }
+
+curvas_estimadores <-
+  map_df(min(elevacion):max(elevacion), ~agregar_x(estimadores, .)) %>%
+  mutate(y = map2_dbl(estimador, x, aplicar_estimador))
+
+
+curvas_estimadores %>%
+  filter(grado == 3 | nombre_nucleo == "uniforme" | nombre_nucleo == "epanechnikov") %>%
+  ggplot(aes(x, y, color = modelo)) +
+  geom_line() +
+  geom_point(data = df, mapping = aes(x = elevacion, y = temp_anual), inherit.aes = F) +
+  labs(title = "Fig. 7: Datos y curvas para los estimadores seleccionados.",
+       x = "Elevación", y = "Temperatura Anual", color = "Modelo") -> fig7
+
+ggsave("fig7_mejores_modelos.png", fig7)
+fig7
 ```
-#Tabla comparativa de los errores obtenidos 
-
-Modelo | Error
-------------------------------|----------------------------
-Lineal                        | `r error_lin`
-Cuadrático                      | `r error_cuad`
-Grado 13                        | `r error_grado_alto`
-No Paramétrico Epanechnikov       | `r error_NW`
-No Paramétrico Gaussiano          | `r error_gaussiano`
 
 # Conclusiones
 
- Decepcionantemente y a pesar de nuestro esfuerzo, los polinomios ajustados por la función implementada `lm` ofrecen un error menor para la validación cruzada a partir de un grado tan bajo como 2 y se perfilan con una eficiencia muy superior en este caso.
+Curiosamente, un método tan sencillo como la regresión polinómica ofrece en este caso estimaciones aún mejores que el método no paramétrico. Aún dentro de los estimadores no paramétricos, el núcleo que menor error ofrece terminó siendo el "más sencillo", el uniforme.
+
+La bibliografía hace constar además dos datos relevantes en este sentido: el primero es que en general las regresiones no paramétricas requieren grandes conjuntos de datos para alcanzar su mejor desempeño, y el segundo es que la fortaleza de este sistema es adaptarse a modelos que requieren funciones inusuales, cosa que aparentemente no sucede en este caso. Queda pendiente repetir este proceso para algun conjunto de datos más grande y errático.
+
+Más allá de los resultados concretos de este TP, fue interesante realizar el ejercicio de trabajar con funciones generadoras de funciones, lo cual nos permitió realizar una búsqueda exhaustiva sobre los parámetros que definen a cada modelo, en particular $h$ y $g$. Más adelante, cuando los parámetros a ajustar en los modelos sean más numerosos, este tipo de herramientas nos ofrecerá un gran potencial para optimizar nuestras elecciones.
 
 
- Esto se explica considerando que los mismos cuando existen siempre ofrecen el mínimo error posible, cosa que la regresión no paramétrica no puede garantizar.
 
-
-  La bibliografía hace constar además dos datos relevantes en este sentido: el primero es que en general las regresiones no paramétricas requieren grandes conjuntos de datos para alcanzar su mejor desempeño (aunque en particular las que usan nucleos morigeran esta necesidad) y el segundo es que la fortaleza de este sistema es adaptarse a modelos que requieren funciones inusuales, cosa que aparentemente no sucede en este caso. 
- 
- Queda pendiente repetir este proceso para algun conjunto de datos más grande y errático. 
 
