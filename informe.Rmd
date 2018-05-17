@@ -205,10 +205,23 @@ ggsave('fig4_error_NW_segun_h.png', fig, width = 7, height = 4)
 fig
 
 modelo_no_parametrico <- construir_estimador_NW( df$elevacion, df$temp_anual, NUCLEO_ELEGIDO, 155 )
-modelo_no_parametrico(5)
+
 ```
 
+#### Estimamos por Otro Núcleo
 
+De esta forma, nos cercioramos de que el resultado obtenido es representativo. Seguimos un procedimiento similar (cambiando la variable `NUCLEO_ELEGIDO`) y hallamos que en ese caso el *h* óptimo es 98,87. Como se ve el cambio de nucleo no impacta sobre el rendimiento de la regresión.   
+
+```{r modelo Gaussiano, cache=T}
+
+modelo_no_parametrico2 <- construir_estimador_NW( df$elevacion, df$temp_anual, 'gaussiano', 98.87 )
+
+estimador_de_error_NW_dado_h2 <-
+  construir_estimador_de_error_NW_dado_h(df$elevacion, df$temp_anual, 'gaussiano')
+
+error_gaussiano <- estimador_de_error_NW_dado_h2(98.87)
+error_gaussiano
+```
 # Estimación paramétrica
 
 Vamos a comprar nuestro modelo no paramétrico con sus antagonistas paramétricos ajustando varios polinomios por `lm` y obteniendo su error por procedimientos similares. 
@@ -246,10 +259,11 @@ evaluar_modelo_lineal_LOOCV <- function(X,Y,grado){
 
 error_lin <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,1)
 error_cuad <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,2)
+error_NW <- estimador_de_error_NW_dado_h(155)
 
 error_lin
 error_cuad
-estimador_de_error_NW_dado_h(155)
+error_NW
 
 modelo_lineal <- polinomio_dados_coeficientes (unname ( coefficients (
   lm (temp_anual ~ poly(elevacion, degree = 1,raw=T), list(elevacion = df$elevacion,temp_anual = df$temp_anual))
@@ -260,24 +274,29 @@ modelo_cuadratico <- polinomio_dados_coeficientes (unname ( coefficients (
   ) ) )
 
 modelo_grado_alto <- polinomio_dados_coeficientes (unname ( coefficients (
-  lm (temp_anual ~ poly(elevacion, degree = 10,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
+  lm (temp_anual ~ poly(elevacion, degree = 13,raw=T),list(elevacion = df$elevacion,temp_anual = df$temp_anual))
   ) ) )
 
-
-error_grado_alto <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,10)
+error_grado_alto <- evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,13)
 error_grado_alto
 
+error_polinomios <- tibble(
+  grado = seq(1,20),
+  error = map_dbl(grado,~evaluar_modelo_lineal_LOOCV(df$elevacion,df$temp_anual,.x))
+)
+
+error_polinomios
 ```
 
 
 ```{r gráfico encimado de los modelos, cache=T}
 
-rango <- seq(min(df$elevacion),max(df$elevacion), by = 10)
+rango <- seq(min(df$elevacion),max(df$elevacion), by = 1)
 
 modelos <- list(
   'lineal' = modelo_lineal,
   'cuadrático' = modelo_cuadratico,
-  'grado diez' = modelo_grado_alto,
+  'grado trece' = modelo_grado_alto,
   'no paramétrico' = modelo_no_parametrico
 )
 
@@ -293,3 +312,25 @@ tabla_modelos <- tibble(
 ggsave("figComparacion.png", figComparacion, width = 10, height = 10)
 figComparacion
 ```
+#Tabla comparativa de los errores obtenidos 
+
+Modelo | Error
+------------------------------|----------------------------
+Lineal                        | `r error_lin`
+Cuadrático                      | `r error_cuad`
+Grado 13                        | `r error_grado_alto`
+No Paramétrico Epanechnikov       | `r error_NW`
+No Paramétrico Gaussiano          | `r error_gaussiano`
+
+# Conclusiones
+
+ Decepcionantemente y a pesar de nuestro esfuerzo, los polinomios ajustados por la función implementada `lm` ofrecen un error menor para la validación cruzada a partir de un grado tan bajo como 2 y se perfilan con una eficiencia muy superior en este caso.
+
+
+ Esto se explica considerando que los mismos cuando existen siempre ofrecen el mínimo error posible, cosa que la regresión no paramétrica no puede garantizar.
+
+
+  La bibliografía hace constar además dos datos relevantes en este sentido: el primero es que en general las regresiones no paramétricas requieren grandes conjuntos de datos para alcanzar su mejor desempeño (aunque en particular las que usan nucleos morigeran esta necesidad) y el segundo es que la fortaleza de este sistema es adaptarse a modelos que requieren funciones inusuales, cosa que aparentemente no sucede en este caso. 
+ 
+ Queda pendiente repetir este proceso para algun conjunto de datos más grande y errático. 
+
