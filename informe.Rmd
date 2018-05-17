@@ -18,7 +18,7 @@ library(knitr)
 
 Leemos los datos y construimos un `data-frame` con nombres significativos y tipos adecuados a cada variable. En base a él, realizamos el diagrama de dispersión para las variables "elevación" y "temperatura anual".
 
-```{r ingreso de datos, cache=T}
+```{r ingreso de datos}
 df <- read_csv(
   file = "ortann.csv",
   col_types = cols(
@@ -91,7 +91,7 @@ nucleos <- list(
 
 Y los graficamos para comprobar que actúan como esperamos.
 
-```{r gráfico de los núcleos, cache=T}
+```{r gráfico de los núcleos}
 rango <- seq(-1.1, 1.1, by = 0.01)
 aplicar_nucleo <- function(nombre_nucleo, x) { nucleos[[nombre_nucleo]](x) }
 
@@ -127,7 +127,7 @@ estimador_densidad <- function(X, nombre_nucleo, h, x) {
 
 Estimamos la densidad para cada núcleo definido sobre una primera grilla que sencillamente recorre los valores entre el máximo y el mínimo del conjunto de datos. 
 
-```{r densidad elelevacion para h seleccionados, cache = T}
+```{r densidad elelevacion para h seleccionados}
 elevacion <- df$elevacion
 grilla <- min(elevacion):max(elevacion)
 h_prueba <- c(50L, 200L, 400L)
@@ -151,7 +151,7 @@ cross_df(.l = list(
 
 La tabla de `densidades` tendrá `r dim(densidades)[[1]]` filas, que provienen del producto cartesiano de `r length(grilla)` valores de la grilla de elevaciones $\times$ `r length(h_prueba)` anchos de banda $\times$ `r length(nucleos)` núcleos evaluados. Veamos cómo se comporta cada núcleo, escalando la densidad para que sea comparable con el histograma:
 
-```{r comparacion_nucleos, fig.height = 12, cache = T}
+```{r comparacion_nucleos, fig.height = 12}
 agregar_h <- function(df, h) {df %>% mutate(h = h)}
 
 map_df(h_prueba, ~agregar_h(df, .)) %>%
@@ -220,7 +220,7 @@ estimador_de_error_NW <-
 
 Armados de una función para comparar los estimadores, los evaluamos para las 4000 combinaciones de parámetros que surgen de combinar 1000 valores de $h$ y 4 núcleos:
 
-```{r ecm_por_nucleo_y_h, cache = T}
+```{r ecm_por_nucleo_y_h}
 cross_df(.l = list(nombre_nucleo = names(nucleos), h = 1:1000)) %>%
   mutate( ecm = pmap_dbl(.l = list(nombre_nucleo, h),
                         .f = estimador_de_error_NW)) %>%
@@ -249,7 +249,7 @@ kable(minimos_por_nucleo, digits = 5)
 
 Aunque el h óptimo por núcleo varía considerablemente, vemos que el valor del ECM mínimo no lo hace tanto. A continuación, una comparación gráfica:
 
-```{r minimos ecm por nucleo, cache = T}
+```{r minimos ecm por nucleo}
 minimos_por_nucleo <- minimos_por_nucleo %>%
   mutate(etiqueta = str_c("ECM: ", round(ecm, 3), " (h = ", h, ")"))
 
@@ -273,7 +273,7 @@ Vamos a comprar nuestro modelo no paramétrico con sus antagonistas paramétrico
 Primero vamos a definir una función `polinomio_dados_coeficientes` para poder aprovechar la salida del comando `lm`.
 
 Luego, tal como hicimos con el ancho de banda $h$ para el estimador de Nadaraya-Watson, escribimos una función que dado un grado $g$ para la regresión polinómica, nos devuelva el ECM calculado por LOOCV, y graficamos los resultados.
-```{r estimaciones por lm, cache=T}
+```{r estimaciones por lm}
 
 polinomio_dados_coeficientes <- function(coeficientes) {
   function(x) {
@@ -362,7 +362,7 @@ kable(resumen_general, digits = 5)
 ```
 
 
-```{r gráfico encimado de los modelos, cache=T}
+```{r gráfico encimado de los modelos}
 
 estimador_no_parametrico <- function(nombre_nucleo, h) {
   construir_estimador_NW(df$elevacion, df$temp_anual, nombre_nucleo, h)
