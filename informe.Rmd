@@ -1,10 +1,10 @@
 ---
-title: "TP2 Análisis Exploratorio de Datos"
+title: "TP3 Análisis Exploratorio de Datos"
 author: "Juan Manuel Berros, Octavio M. Duarte y Gonzalo Barrera Borla"
 date: "16 de Mayo de 2018"
 output:
-  html_document: default
   pdf_document: default
+  html_document: default
 ---
 # Preliminares
 
