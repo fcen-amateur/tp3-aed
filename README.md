@@ -11,6 +11,6 @@ Repositorio para el TP #3 de Análisis Exploratorio de Datos
   
   
 ## Informe
-El informe final se pueden ver directamente en su PC, descargando el repositorio y abriéndolo como un documento común con cualquier navegador, o online en [este link](http://htmlpreview.github.io/?https://github.com/capitantoto/tp3-aed/blob/master/informe.html)
+El informe final se pueden ver directamente en su PC, descargando el repositorio y abriéndolo como un documento común con cualquier navegador, o online en [este link](http://htmlpreview.github.io/?https://github.com/memfcen-amateur/tp3-aed/blob/master/informe.html)
 
 ¡Gracias, vuelva pronto!
