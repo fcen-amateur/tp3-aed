@@ -1,5 +1,5 @@
 # tp3-aed
-Repositorio para el TP #3 de Análisis Exploratorio de Datos
+Repositorio para el TP #3 de Análisis Exploratorio de Datos.
 
 * Alumnos: Octavio M. Duarte, Juan Manuel Berros y Gonzalo Barrera Borla
 * Profesor: Lucas Bali
